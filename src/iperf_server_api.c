@@ -52,6 +52,7 @@
 #include "iperf_api.h"
 #include "iperf_udp.h"
 #include "iperf_tcp.h"
+#include "iperf_raw.h"
 #include "iperf_util.h"
 #include "timer.h"
 #include "iperf_time.h"
@@ -722,7 +723,7 @@ iperf_run_server(struct iperf_test *test)
                              * We need this to allow a server receiver to
                              * maintain interactivity with the control channel.
                              */
-                            if (test->protocol->id != Pudp ||
+                            if ((test->protocol->id != Pudp && test->protocol->id != Praw) ||
                                 !sp->sender) {
                                 setnonblocking(s, 1);
                             }

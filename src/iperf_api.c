@@ -76,6 +76,7 @@
 #include "iperf_api.h"
 #include "iperf_udp.h"
 #include "iperf_tcp.h"
+#include "iperf_raw.h"
 #if defined(HAVE_SCTP_H)
 #include "iperf_sctp.h"
 #endif /* HAVE_SCTP_H */
@@ -1038,6 +1039,7 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
         {"server", no_argument, NULL, 's'},
         {"client", required_argument, NULL, 'c'},
         {"udp", no_argument, NULL, 'u'},
+        {"raw", no_argument, NULL, 'r'},
         {"bitrate", required_argument, NULL, 'b'},
         {"bandwidth", required_argument, NULL, 'b'},
 	{"server-bitrate-limit", required_argument, NULL, OPT_SERVER_BITRATE_LIMIT},
@@ -1128,7 +1130,7 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
     char *client_username = NULL, *client_rsa_public_key = NULL, *server_rsa_private_key = NULL;
 #endif /* HAVE_SSL */
 
-    while ((flag = getopt_long(argc, argv, "p:f:i:D1VJvsc:ub:t:n:k:l:P:Rw:B:M:N46S:L:ZO:F:A:T:C:dI:hX:", longopts, NULL)) != -1) {
+    while ((flag = getopt_long(argc, argv, "p:f:i:D1VJvsc:urb:t:n:k:l:P:Rw:B:M:N46S:L:ZO:F:A:T:C:dI:hX:", longopts, NULL)) != -1) {
         switch (flag) {
             case 'p':
 		portno = atoi(optarg);
@@ -1215,6 +1217,10 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
                 break;
             case 'u':
                 set_protocol(test, Pudp);
+		client_flag = 1;
+                break;
+            case 'r':
+                set_protocol(test, Praw);
 		client_flag = 1;
                 break;
             case OPT_SCTP:
@@ -1679,25 +1685,25 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
 #endif //HAVE_SSL
 
     // File cannot be transferred using UDP because of the UDP packets header (packet number, etc.)
-    if(test->role == 'c' && test->diskfile_name != (char*) 0 && test->protocol->id == Pudp) {
+    if(test->role == 'c' && test->diskfile_name != (char*) 0 && (test->protocol->id == Pudp || test->protocol->id == Praw)) {
         i_errno = IEUDPFILETRANSFER;
         return -1;
     }
 
     if (blksize == 0) {
-	if (test->protocol->id == Pudp)
+	if (test->protocol->id == Pudp || test->protocol->id == Praw)
 	    blksize = 0;	/* try to dynamically determine from MSS */
 	else if (test->protocol->id == Psctp)
 	    blksize = DEFAULT_SCTP_BLKSIZE;
 	else
 	    blksize = DEFAULT_TCP_BLKSIZE;
     }
-    if ((test->protocol->id != Pudp && blksize <= 0)
+    if ((test->protocol->id != Pudp && test->protocol->id != Praw && blksize <= 0)
 	|| blksize > MAX_BLOCKSIZE) {
 	i_errno = IEBLOCKSIZE;
 	return -1;
     }
-    if (test->protocol->id == Pudp &&
+    if (test->protocol->id == Pudp && test->protocol->id != Praw &&
 	(blksize > 0 &&
 	    (blksize < MIN_UDP_BLOCKSIZE || blksize > MAX_UDP_BLOCKSIZE))) {
 	i_errno = IEUDPBLOCKSIZE;
@@ -1706,7 +1712,7 @@ iperf_parse_arguments(struct iperf_test *test, int argc, char **argv)
     test->settings->blksize = blksize;
 
     if (!rate_flag)
-	test->settings->rate = test->protocol->id == Pudp ? UDP_RATE : 0;
+	test->settings->rate = (test->protocol->id == Pudp || test->protocol->id == Praw) ? UDP_RATE : 0;
 
     /* if no bytes or blocks specified, nor a duration_flag, and we have -F,
     ** get the file-size as the bytes count to be transferred
@@ -2830,6 +2836,7 @@ int
 iperf_defaults(struct iperf_test *testp)
 {
     struct protocol *tcp, *udp;
+    struct protocol *raw;
 #if defined(HAVE_SCTP_H)
     struct protocol *sctp;
 #endif /* HAVE_SCTP_H */
@@ -2919,6 +2926,24 @@ iperf_defaults(struct iperf_test *testp)
 
     set_protocol(testp, Ptcp);
 
+    raw = protocol_new();
+    if (!raw) {
+        protocol_free(tcp);
+        protocol_free(udp);
+        return -1;
+    }
+
+    raw->id = Praw;
+    raw->name = "RAW";
+    raw->accept = iperf_raw_accept;
+    raw->listen = iperf_raw_listen;
+    raw->connect = iperf_raw_connect;
+    raw->send = iperf_raw_send;
+    raw->recv = iperf_raw_recv;
+    raw->init = iperf_raw_init;
+
+    SLIST_INSERT_AFTER(udp, raw, protocols);
+
 #if defined(HAVE_SCTP_H)
     sctp = protocol_new();
     if (!sctp) {
@@ -2936,7 +2961,7 @@ iperf_defaults(struct iperf_test *testp)
     sctp->recv = iperf_sctp_recv;
     sctp->init = iperf_sctp_init;
 
-    SLIST_INSERT_AFTER(udp, sctp, protocols);
+    SLIST_INSERT_AFTER(raw, sctp, protocols);
 #endif /* HAVE_SCTP_H */
 
     testp->on_new_stream = iperf_on_new_stream;

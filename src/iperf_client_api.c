@@ -445,7 +445,7 @@ iperf_connect(struct iperf_test *test)
      * directions.  Note that even if the algorithm guesses wrong,
      * the user always has the option to override.
      */
-    if (test->protocol->id == Pudp) {
+    if (test->protocol->id == Pudp || test->protocol->id == Praw) {
 	if (test->settings->blksize == 0) {
 	    if (test->ctrl_sck_mss) {
 		test->settings->blksize = test->ctrl_sck_mss;
@@ -621,7 +621,7 @@ iperf_run_client(struct iperf_test * test)
 	        startup = 0;
 
 		// Set non-blocking for non-UDP tests
-		if (test->protocol->id != Pudp) {
+		if (test->protocol->id != Pudp || test->protocol->id != Praw) {
 		    SLIST_FOREACH(sp, &test->streams, streams) {
 			setnonblocking(sp->socket, 1);
 		    }
@@ -666,7 +666,7 @@ iperf_run_client(struct iperf_test * test)
 						  test->blocks_received >= test->settings->blocks)))) {
 
 		// Unset non-blocking for non-UDP tests
-		if (test->protocol->id != Pudp) {
+		if (test->protocol->id != Pudp || test->protocol->id != Praw) {
 		    SLIST_FOREACH(sp, &test->streams, streams) {
 			setnonblocking(sp->socket, 0);
 		    }
