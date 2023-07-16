@@ -2161,6 +2161,8 @@ send_parameters(struct iperf_test *test)
 	    cJSON_AddTrueToObject(j, "tcp");
 	else if (test->protocol->id == Pudp)
 	    cJSON_AddTrueToObject(j, "udp");
+	else if (test->protocol->id == Praw)
+	    cJSON_AddTrueToObject(j, "raw");
         else if (test->protocol->id == Psctp)
             cJSON_AddTrueToObject(j, "sctp");
 	cJSON_AddNumberToObject(j, "omit", test->omit);
@@ -2270,6 +2272,8 @@ get_parameters(struct iperf_test *test)
 	    set_protocol(test, Ptcp);
 	if ((j_p = cJSON_GetObjectItem(j, "udp")) != NULL)
 	    set_protocol(test, Pudp);
+	if ((j_p = cJSON_GetObjectItem(j, "raw")) != NULL)
+	    set_protocol(test, Praw);
         if ((j_p = cJSON_GetObjectItem(j, "sctp")) != NULL)
             set_protocol(test, Psctp);
 	if ((j_p = cJSON_GetObjectItem(j, "omit")) != NULL)
@@ -4414,6 +4418,11 @@ iperf_common_sockopts(struct iperf_test *test, int s)
 
     /* Set IP TOS */
     if ((opt = test->settings->tos)) {
+        if (iperf_get_test_protocol_id(test) == Praw)
+        {
+            printf("RAW socket do not support cos/dscp socket_opt, ignore.\n");
+            return 0;
+        }
 	if (getsockdomain(s) == AF_INET6) {
 #ifdef IPV6_TCLASS
 	    if (setsockopt(s, IPPROTO_IPV6, IPV6_TCLASS, &opt, sizeof(opt)) < 0) {
@@ -4449,6 +4458,22 @@ iperf_init_stream(struct iperf_stream *sp, struct iperf_test *test)
     int opt;
     socklen_t len;
 
+    if (iperf_get_test_protocol_id(test) == Praw)
+    {
+        /* For RAW, get addr info from ctrl_sck instead of raw socket */
+        len = sizeof(struct sockaddr_storage);
+        if (getsockname(test->ctrl_sck, (struct sockaddr *) &sp->local_addr, &len) < 0) {
+            i_errno = IEINITSTREAM;
+            return -1;
+        }
+        len = sizeof(struct sockaddr_storage);
+        if (getpeername(test->ctrl_sck, (struct sockaddr *) &sp->remote_addr, &len) < 0) {
+            i_errno = IEINITSTREAM;
+            return -1;
+        }
+    }
+    else
+    {
     len = sizeof(struct sockaddr_storage);
     if (getsockname(sp->socket, (struct sockaddr *) &sp->local_addr, &len) < 0) {
         i_errno = IEINITSTREAM;
@@ -4459,7 +4484,7 @@ iperf_init_stream(struct iperf_stream *sp, struct iperf_test *test)
         i_errno = IEINITSTREAM;
         return -1;
     }
-
+    }
 #if defined(HAVE_DONT_FRAGMENT)
     /* Set Don't Fragment (DF). Only applicable to IPv4/UDP tests. */
     if (iperf_get_test_protocol_id(test) == Pudp &&

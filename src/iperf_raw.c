@@ -40,6 +40,9 @@
 #include <sys/time.h>
 #include <sys/select.h>
 
+#include <linux/ip.h>
+#include <linux/if_ether.h>
+
 #include "iperf.h"
 #include "iperf_api.h"
 #include "iperf_util.h"
@@ -71,13 +74,29 @@ iperf_raw_recv(struct iperf_stream *sp)
     uint32_t  sec, usec;
     uint64_t  pcount;
     int       r;
-    int       size = sp->settings->blksize;
+    int       size = sp->settings->blksize + sizeof(struct iphdr);
     int       first_packet = 0;
     double    transit = 0, d = 0;
     struct iperf_time sent_time, arrival_time, temp_time;
+    struct iphdr *ip = (struct iphdr*)sp->buffer;
+    char* data = sp->buffer + sizeof(struct iphdr);
 
-    r = Nread(sp->socket, sp->buffer, size, Praw);
-
+    while(1)
+    {
+        r = recvfrom(sp->socket, sp->buffer, size, 0, NULL, NULL);
+        if (r < 0) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+                continue;
+            else
+                return NET_HARDERROR;
+        } else if (r == 0)
+            break;
+        if(ip->protocol == CUSTOM_IP_PROTOCOL_NUM)
+        {
+            break;
+        }
+        return 0; /* Not target IP packet, gracefully return */
+    }
     /*
      * If we got an error in the read, or if we didn't read anything
      * because the underlying read(2) got a EAGAIN, then skip packet
@@ -102,9 +121,9 @@ iperf_raw_recv(struct iperf_stream *sp)
 
 	/* Dig the various counters out of the incoming RAW packet */
 	if (sp->test->udp_counters_64bit) {
-	    memcpy(&sec, sp->buffer, sizeof(sec));
-	    memcpy(&usec, sp->buffer+4, sizeof(usec));
-	    memcpy(&pcount, sp->buffer+8, sizeof(pcount));
+	    memcpy(&sec, data, sizeof(sec));
+	    memcpy(&usec, data+4, sizeof(usec));
+	    memcpy(&pcount, data+8, sizeof(pcount));
 	    sec = ntohl(sec);
 	    usec = ntohl(usec);
 	    pcount = be64toh(pcount);
@@ -113,9 +132,9 @@ iperf_raw_recv(struct iperf_stream *sp)
 	}
 	else {
 	    uint32_t pc;
-	    memcpy(&sec, sp->buffer, sizeof(sec));
-	    memcpy(&usec, sp->buffer+4, sizeof(usec));
-	    memcpy(&pc, sp->buffer+8, sizeof(pc));
+	    memcpy(&sec, data, sizeof(sec));
+	    memcpy(&usec, data+4, sizeof(usec));
+	    memcpy(&pc, data+8, sizeof(pc));
 	    sec = ntohl(sec);
 	    usec = ntohl(usec);
 	    pcount = ntohl(pc);
@@ -213,10 +232,25 @@ int
 iperf_raw_send(struct iperf_stream *sp)
 {
     int r;
-    int       size = sp->settings->blksize;
+    int       size = sp->settings->blksize + sizeof(struct iphdr);
     struct iperf_time before;
-
+    struct iphdr *ip = (struct iphdr *) sp->buffer;
+    char *data = sp->buffer + sizeof(struct iphdr);
     iperf_time_now(&before);
+    
+    memset(ip, 0, sizeof(struct iphdr));
+    if (getsockdomain(sp->socket) == AF_INET) {
+        ip->ihl      = 5;
+        ip->version  = 4;
+        ip->ttl      = 64;
+        ip->protocol = CUSTOM_IP_PROTOCOL_NUM;
+        ip->saddr = ((struct sockaddr_in *) &sp->local_addr)->sin_addr.s_addr;
+        ip->daddr = ((struct sockaddr_in *) &sp->remote_addr)->sin_addr.s_addr;
+    }
+    else
+    {
+        return -1; /* Not support IPv6 now */
+    }
 
     ++sp->packet_count;
 
@@ -229,9 +263,9 @@ iperf_raw_send(struct iperf_stream *sp)
 	usec = htonl(before.usecs);
 	pcount = htobe64(sp->packet_count);
 
-	memcpy(sp->buffer, &sec, sizeof(sec));
-	memcpy(sp->buffer+4, &usec, sizeof(usec));
-	memcpy(sp->buffer+8, &pcount, sizeof(pcount));
+	memcpy(data, &sec, sizeof(sec));
+	memcpy(data+4, &usec, sizeof(usec));
+	memcpy(data+8, &pcount, sizeof(pcount));
 
     }
     else {
@@ -242,13 +276,13 @@ iperf_raw_send(struct iperf_stream *sp)
 	usec = htonl(before.usecs);
 	pcount = htonl(sp->packet_count);
 
-	memcpy(sp->buffer, &sec, sizeof(sec));
-	memcpy(sp->buffer+4, &usec, sizeof(usec));
-	memcpy(sp->buffer+8, &pcount, sizeof(pcount));
+	memcpy(data, &sec, sizeof(sec));
+	memcpy(data+4, &usec, sizeof(usec));
+	memcpy(data+8, &pcount, sizeof(pcount));
 
     }
 
-    r = Nwrite(sp->socket, sp->buffer, size, Praw);
+    r = sendto(sp->socket, sp->buffer, size, 0, (struct sockaddr *) &sp->remote_addr, sizeof(sp->remote_addr));
 
     if (r < 0)
 	return r;
@@ -388,7 +422,7 @@ iperf_raw_accept(struct iperf_test *test)
     s = test->prot_listener;
 
     /*
-     * Grab the RAW packet sent by the client.  From that we can extract the
+     * Grab the UDP packet sent by the client.  From that we can extract the
      * client's address, and then use that information to bind the remote side
      * of the socket to the client.
      */
@@ -453,7 +487,7 @@ iperf_raw_accept(struct iperf_test *test)
     /*
      * Create a new "listening" socket to replace the one we were using before.
      */
-    test->prot_listener = netannounce(test->settings->domain, Praw, test->bind_address, test->bind_dev, test->server_port);
+    test->prot_listener = netannounce(test->settings->domain, Pudp, test->bind_address, test->bind_dev, test->server_port);
     if (test->prot_listener < 0) {
         i_errno = IESTREAMLISTEN;
         return -1;
@@ -466,6 +500,13 @@ iperf_raw_accept(struct iperf_test *test)
     buf = RAW_CONNECT_REPLY;
     if (write(s, &buf, sizeof(buf)) < 0) {
         i_errno = IESTREAMWRITE;
+        return -1;
+    }
+    
+    close(s);
+    s = netannounce(test->settings->domain, Praw, test->bind_address, test->bind_dev, 0);
+    if (s < 0) {
+        i_errno = IESTREAMLISTEN;
         return -1;
     }
 
@@ -485,7 +526,7 @@ iperf_raw_listen(struct iperf_test *test)
 {
     int s;
 
-    if ((s = netannounce(test->settings->domain, Praw, test->bind_address, test->bind_dev, test->server_port)) < 0) {
+    if ((s = netannounce(test->settings->domain, Pudp, test->bind_address, test->bind_dev, test->server_port)) < 0) {
         i_errno = IESTREAMLISTEN;
         return -1;
     }
@@ -514,7 +555,7 @@ iperf_raw_connect(struct iperf_test *test)
     int i, max_len_wait_for_reply;
 
     /* Create and bind our local socket. */
-    if ((s = netdial(test->settings->domain, Praw, test->bind_address, test->bind_dev, test->bind_port, test->server_hostname, test->server_port, -1)) < 0) {
+    if ((s = netdial(test->settings->domain, Pudp, test->bind_address, test->bind_dev, test->bind_port, test->server_hostname, test->server_port, -1)) < 0) {
         i_errno = IESTREAMCONNECT;
         return -1;
     }
@@ -613,6 +654,14 @@ iperf_raw_connect(struct iperf_test *test)
         return -1;
     }
 
+    /* Close UDP socket, create RAW socket */
+    close(s);
+    if ((s = netdial(test->settings->domain, Praw, test->bind_address, test->bind_dev, 0, test->server_hostname, 0, -1)) < 0) {
+        i_errno = IESTREAMCONNECT;
+        return -1;
+    }
+    iperf_common_sockopts(test, s);
+
     return s;
 }
 
@@ -624,5 +673,13 @@ iperf_raw_connect(struct iperf_test *test)
 int
 iperf_raw_init(struct iperf_test *test)
 {
+    static int cnt = 0;
+    char cmd[100] = {0};
+    if (!cnt)
+    {
+        sprintf(cmd, "iptables -C INPUT -p %d -j DROP || iptables -I INPUT -p %d -j DROP", CUSTOM_IP_PROTOCOL_NUM, CUSTOM_IP_PROTOCOL_NUM);
+        system(cmd);
+        cnt++;
+    }
     return 0;
 }

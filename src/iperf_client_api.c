@@ -124,10 +124,11 @@ iperf_create_streams(struct iperf_test *test, int sender)
         sp = iperf_new_stream(test, s, sender);
         if (!sp)
             return -1;
-
+        if (test->protocol->id != Praw) {
         /* Perform the new stream callback */
         if (test->on_new_stream)
             test->on_new_stream(sp);
+        }
     }
 
     return 0;

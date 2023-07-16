@@ -39,6 +39,8 @@
 #include <fcntl.h>
 #include <limits.h>
 
+#include<linux/if_ether.h>
+
 #ifdef HAVE_SENDFILE
 #ifdef linux
 #include <sys/sendfile.h>
@@ -139,6 +141,19 @@ create_socket(int domain, int proto, const char *local, const char *bind_dev, in
     hints.ai_family = domain;
     hints.ai_socktype = proto;
     snprintf(portstr, sizeof(portstr), "%d", port);
+    if (proto == SOCK_RAW)
+    {
+        hints.ai_socktype = 0; // Any proto
+        if ((gerror = getaddrinfo(server, NULL, &hints, &server_res)) != 0) {
+            if (local)
+                freeaddrinfo(local_res);
+            return -1;
+        }
+
+        s = socket(server_res->ai_family, proto, IPPROTO_RAW); // Will send custom IP protocol
+    }
+    else
+    {
     if ((gerror = getaddrinfo(server, portstr, &hints, &server_res)) != 0) {
 	if (local)
 	    freeaddrinfo(local_res);
@@ -146,6 +161,7 @@ create_socket(int domain, int proto, const char *local, const char *bind_dev, in
     }
 
     s = socket(server_res->ai_family, proto, 0);
+    }
     if (s < 0) {
 	if (local)
 	    freeaddrinfo(local_res);
@@ -240,6 +256,10 @@ netdial(int domain, int proto, const char *local, const char *bind_dev, int loca
       return -1;
     }
 
+    if(SOCK_RAW == proto){ /* Unknown what will happen use connect() in raw socket, return */
+        return s;
+    }
+
     if (timeout_connect(s, (struct sockaddr *) server_res->ai_addr, server_res->ai_addrlen, timeout) < 0 && errno != EINPROGRESS) {
 	saved_errno = errno;
 	close(s);
@@ -283,10 +303,21 @@ netannounce(int domain, int proto, const char *local, const char *bind_dev, int 
     }
     hints.ai_socktype = proto;
     hints.ai_flags = AI_PASSIVE;
+    if (SOCK_RAW == proto)
+    {
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = 0;
+        if ((gerror = getaddrinfo(local, portstr, &hints, &res)) != 0)
+            return -1;
+        s = socket(PF_PACKET, SOCK_DGRAM, htons(ETH_P_IP));
+    }
+    else
+    {
     if ((gerror = getaddrinfo(local, portstr, &hints, &res)) != 0)
         return -1;
 
     s = socket(res->ai_family, proto, 0);
+    }
     if (s < 0) {
 	freeaddrinfo(res);
         return -1;
@@ -306,6 +337,8 @@ netannounce(int domain, int proto, const char *local, const char *bind_dev, int 
         }
     }
 
+    if (SOCK_RAW != proto)
+    {
     opt = 1;
     if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR,
 		   (char *) &opt, sizeof(opt)) < 0) {
@@ -346,6 +379,7 @@ netannounce(int domain, int proto, const char *local, const char *bind_dev, int 
 	freeaddrinfo(res);
         errno = saved_errno;
         return -1;
+    }
     }
 
     freeaddrinfo(res);

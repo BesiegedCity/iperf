@@ -27,6 +27,7 @@
 #ifndef __IPERF_RAW_H
 #define __IPERF_RAW_H
 
+#define CUSTOM_IP_PROTOCOL_NUM 254
 
 /**
  * iperf_raw_recv -- receives the client data for RAW
