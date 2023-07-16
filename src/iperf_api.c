@@ -4420,7 +4420,7 @@ iperf_common_sockopts(struct iperf_test *test, int s)
     if ((opt = test->settings->tos)) {
         if (iperf_get_test_protocol_id(test) == Praw)
         {
-            printf("RAW socket do not support cos/dscp socket_opt, ignore.\n");
+            // printf("RAW socket do not support tos/dscp socket_opt, ignore.\n"); // For RAW, tos will be set when sending, not here
             return 0;
         }
 	if (getsockdomain(s) == AF_INET6) {

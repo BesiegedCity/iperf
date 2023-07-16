@@ -91,7 +91,7 @@ iperf_raw_recv(struct iperf_stream *sp)
                 return NET_HARDERROR;
         } else if (r == 0)
             break;
-        if(ip->protocol == CUSTOM_IP_PROTOCOL_NUM)
+        if(ip->protocol == CUSTOM_IP_PROTOCOL_NUM && ip->tos == sp->test->settings->tos) /* Use tos field to distinguish different ip traffic */
         {
             break;
         }
@@ -243,6 +243,7 @@ iperf_raw_send(struct iperf_stream *sp)
         ip->ihl      = 5;
         ip->version  = 4;
         ip->ttl      = 64;
+        ip->tos      = sp->test->settings->tos;
         ip->protocol = CUSTOM_IP_PROTOCOL_NUM;
         ip->saddr = ((struct sockaddr_in *) &sp->local_addr)->sin_addr.s_addr;
         ip->daddr = ((struct sockaddr_in *) &sp->remote_addr)->sin_addr.s_addr;
